@@ -1,0 +1,58 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: gofmt
+        run: test -z "$(gofmt -l .)"
+      - run: go vet ./...
+      - name: install fuse
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y fuse3
+      - name: test
+        env:
+          # FUSE-backed tests must run on Linux CI, not skip.
+          LOCKPROBE_REQUIRE_FUSE: ${{ runner.os == 'Linux' && '1' || '' }}
+        run: go test -count=1 -v ./...
+
+  # Real kernel NFS. Two mounts of one export with `nosharecache` get
+  # separate superblocks, which is the closest a single runner gets to
+  # two client hosts. With lockd the locks must agree; with
+  # local_lock=posix each mount keeps them locally and lockprobe must fail.
+  nfs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: go build -o lockprobe ./cmd/lockprobe
+      - name: start nfs server
+        run: |
+          sudo apt-get update && sudo apt-get install -y nfs-kernel-server
+          sudo mkdir -p /srv/share && sudo chmod 777 /srv/share
+          echo '/srv/share 127.0.0.1(rw,sync,no_subtree_check,no_root_squash,insecure)' | sudo tee /etc/exports
+          sudo exportfs -ra
+          sudo systemctl restart nfs-kernel-server
+      - name: expect pass with working locks
+        run: ./scripts/nfs-case.sh "vers=3,nosharecache" 0
+      - name: expect pass with working locks (nfsv4)
+        run: ./scripts/nfs-case.sh "vers=4.2,nosharecache" 0
+      - name: expect fail with client-local locks
+        run: ./scripts/nfs-case.sh "vers=3,nosharecache,local_lock=posix" 1
