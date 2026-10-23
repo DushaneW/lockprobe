@@ -32,9 +32,13 @@ jobs:
         run: go test -count=1 -v ./...
 
   # Real kernel NFS. Two mounts of one export with `nosharecache` get
-  # separate superblocks, which is the closest a single runner gets to
-  # two client hosts. With lockd the locks must agree; with
-  # local_lock=posix each mount keeps them locally and lockprobe must fail.
+  # separate superblocks on one client. Each case asserts lockprobe's exit
+  # code and also prints what real SQLite does on the same mount pair.
+  #
+  # NFSv4.2 is expected to FAIL here: both mounts belong to the same NFSv4
+  # client, so the server does not make their locks exclude each other.
+  # This was found by this job and confirmed by SQLite losing commits on
+  # the same pair. It says nothing about two separate NFSv4 hosts.
   nfs:
     runs-on: ubuntu-latest
     steps:
@@ -50,9 +54,11 @@ jobs:
           echo '/srv/share 127.0.0.1(rw,sync,no_subtree_check,no_root_squash,insecure)' | sudo tee /etc/exports
           sudo exportfs -ra
           sudo systemctl restart nfs-kernel-server
-      - name: expect pass with working locks
+      - name: nfsv3 with lockd, expect pass
         run: ./scripts/nfs-case.sh "vers=3,nosharecache" 0
-      - name: expect pass with working locks (nfsv4)
-        run: ./scripts/nfs-case.sh "vers=4.2,nosharecache" 0
-      - name: expect fail with client-local locks
+      - name: nfsv3 with client-local locks, expect fail
+        if: always()
         run: ./scripts/nfs-case.sh "vers=3,nosharecache,local_lock=posix" 1
+      - name: nfsv4.2, two mounts on one client, expect fail
+        if: always()
+        run: ./scripts/nfs-case.sh "vers=4.2,nosharecache" 1

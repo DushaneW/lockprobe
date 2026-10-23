@@ -53,7 +53,12 @@ That setup is the test fixture in this repo. It is an emulation of a broken shar
 
 With locks forwarded between the mounts, no commits were lost in either mode.
 These are single runs on one Linux 6.18 VM. The numbers show the failure mode, not a rate you should expect.
-The CI job runs the same script on real kernel NFS mounts and prints its results in the log.
+
+The same happens on real kernel NFS.
+In CI, two `nosharecache` mounts of one NFSv4.2 export on the same client did not exclude each other's locks, and lockprobe reported `FAIL`.
+On that same mount pair, the script ended at 2000 of 4000 increments (838 committed-but-lost, 1162 failed transactions), and `integrity_check` was `ok`.
+That result is about two mounts on one client, not two separate NFSv4 hosts.
+The CI log of every run prints these numbers next to lockprobe's verdict.
 
 ## Install
 
@@ -96,7 +101,7 @@ It never opens your database files.
 - A pass is evidence about the moment of the test. It does not cover lock loss after a server or client restart, lease expiry during a network partition, or bugs that only appear under load.
 - **SQLite WAL mode does not work across hosts on any network filesystem, whatever lockprobe says.** Its shared-memory index lives on each host. Use rollback journal mode, or one writer host.
 - Several containers on one Linux host share that host's kernel lock table, so they do coordinate. A Kubernetes rolling update on a single node does not by itself break SQLite locking. Multiple nodes mounting one ReadWriteMany volume is the case to test.
-- The negative case for `shared-mmap` has not been reproduced in testing yet, so its ability to detect a broken setup is unproven.
+- `shared-mmap` fails between two mounts that have separate page caches: two FUSE mounts on GitHub's Ubuntu runners, and two `nosharecache` NFS mounts. That is the expected answer: an mmap-based WAL index cannot work there.
 
 ## Tests
 
@@ -108,8 +113,11 @@ go test ./...
   One variant keeps locks local to each mount (broken share), the other forwards them (working share).
   Both `check` and `pair` must fail on the first and pass on the second.
   The tests skip without FUSE locally; CI sets `LOCKPROBE_REQUIRE_FUSE=1` so they cannot silently skip there.
-- **Real NFS ([`ci.yml`](.github/workflows/ci.yml)):** mounts a kernel NFS export twice with `nosharecache`.
-  With working locks (NFSv3 + lockd, NFSv4.2) both sides must exit 0. With `local_lock=posix` both must exit 1.
+- **Real NFS ([`ci.yml`](.github/workflows/ci.yml)):** mounts a kernel NFS export twice with `nosharecache` and runs `pair` between the two mounts.
+  The expected exit codes are:
+  - NFSv3 with lockd: both sides exit 0.
+  - NFSv3 with `local_lock=posix`: both sides exit 1.
+  - NFSv4.2, two mounts on one client: both sides exit 1.
 
 Not tested: SMB/CIFS, virtiofs, 9p (WSL2), Docker Desktop file sharing, Ceph, and real multi-machine setups.
 Reports from those environments are the most useful issues you can open: include the mount line from `/proc/mounts` and the full output.
