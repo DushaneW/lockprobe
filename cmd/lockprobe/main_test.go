@@ -73,14 +73,18 @@ func TestCheckTwoMountsWithoutSharedLocksFails(t *testing.T) {
 	wantStatus(t, out, "lock-exclusion", "FAIL")
 }
 
-func TestCheckTwoMountsWithSharedLocksPassesButCrossHostUnverified(t *testing.T) {
+// Two FUSE mounts have separate page caches, so whether shared mmap is
+// coherent between them depends on the kernel's FUSE caching (it was on
+// a 6.18 dev VM, not on GitHub's Ubuntu runners). Only the lock result
+// and the cross-host caveat are asserted.
+func TestCheckTwoMountsWithSharedLocksPassesLockCheck(t *testing.T) {
 	back := t.TempDir()
 	a, b := testfs.Mount(t, back, true), testfs.Mount(t, back, true)
 	out, code := runCLI(t, "check", a, b)
 	wantStatus(t, out, "lock-exclusion", "PASS")
 	wantStatus(t, out, "cross-host", "UNVERIFIED")
-	if code != 3 {
-		t.Fatalf("exit %d, want 3:\n%s", code, out)
+	if code != 3 && code != 1 {
+		t.Fatalf("exit %d, want 3 (or 1 from shared-mmap):\n%s", code, out)
 	}
 }
 
