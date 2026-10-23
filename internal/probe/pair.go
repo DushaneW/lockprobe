@@ -89,6 +89,13 @@ func (p *Pair) recv(name string) (string, error) {
 	path := filepath.Join(p.dir, p.peer+"."+name)
 	deadline := time.Now().Add(p.Timeout)
 	for {
+		// Opening the directory forces NFS close-to-open revalidation of
+		// its attributes; without it a cached negative lookup can hide a
+		// newly created message for up to the client's acdirmax (60s).
+		if d, err := os.Open(p.dir); err == nil {
+			d.Readdirnames(-1)
+			d.Close()
+		}
 		b, err := os.ReadFile(path)
 		if err == nil {
 			return string(b), nil
