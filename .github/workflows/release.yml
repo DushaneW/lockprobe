@@ -1,8 +1,10 @@
 name: release
 
+# Runs when a release is published (UI or API); builds the binaries and
+# attaches them to that release.
 on:
-  push:
-    tags: ["v*"]
+  release:
+    types: [published]
 
 permissions:
   contents: write
@@ -12,22 +14,27 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.release.tag_name }}
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
       - name: build
+        env:
+          TAG: ${{ github.event.release.tag_name }}
         run: |
           mkdir dist
           for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64; do
             os=${target%/*} arch=${target#*/}
             CGO_ENABLED=0 GOOS=$os GOARCH=$arch go build -trimpath \
-              -ldflags "-s -w -X main.version=${GITHUB_REF_NAME}" \
+              -ldflags "-s -w -X main.version=${TAG}" \
               -o "dist/lockprobe-${os}-${arch}" ./cmd/lockprobe
           done
           cd dist && sha256sum lockprobe-* > SHA256SUMS
       - name: smoke test linux binary
         run: dist/lockprobe-linux-amd64 check "$RUNNER_TEMP"
-      - name: publish
+      - name: upload
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" dist/* --verify-tag --generate-notes
+          TAG: ${{ github.event.release.tag_name }}
+        run: gh release upload "$TAG" dist/* --clobber
